@@ -1,6 +1,13 @@
 # Multi-Party Computation (MPC) Library
 
-This directory contains a comprehensive MPC library implementation supporting secure computation over multiple algebraic structures:
+This directory contains a comprehensive MPC library implementation supporting secure computation over multiple algebraic structures.
+
+This implementation is based on the paper:
+
+**"Privacy-Preserving Authorized Set Matching via Dishonest Majority Multiparty Computation"**  
+by Guowei Ling, Peng Tang, Fei Tang, et al. (IEEE TDSC 2025)
+
+The library implements the MPC protocols described in the paper, including:
 
 - **F_p**: Finite prime field arithmetic
 - **G1**: Elliptic curve group G1 (from bilinear pairing groups)
@@ -254,6 +261,19 @@ auto result = mpc_systems[0]->OpenGT(gt_share);
 
 ## References
 
-- SPDZ Protocol: "Multiparty computation from somewhat homomorphic encryption" (Crypto 2012)
-- Bilinear Pairings: "Pairings for cryptographers" (Discrete Applied Mathematics, 2006)
-- Secure Pairing Computation: Based on bilinearity property e(P + Q, R) = e(P, R) * e(Q, R)
+### Primary Reference
+
+- **Ling, G., Tang, P., Tang, F., et al.** "Privacy-Preserving Authorized Set Matching via Dishonest Majority Multiparty Computation." *IEEE Transactions on Dependable and Secure Computing (TDSC)*, 2025.
+
+  This paper describes the MPC protocols implemented in this library, including:
+  - Secret scalar-secret point multiplication [k] * [P] (SecSarMul3_G protocol)
+  - Secure pairing protocols e([P], Q), e(P, [Q]), and e([P], [Q])
+  - N-party extension of SPDZ-style protocols
+
+### Additional References
+
+- **Damgård, I., Pastro, V., Smart, N., & Zakarias, S.** "Multiparty computation from somewhat homomorphic encryption." *Advances in Cryptology – CRYPTO 2012*, pp. 643-662, 2012. (SPDZ Protocol)
+
+- **Galbraith, S. D., Paterson, K. G., & Smart, N. P.** "Pairings for cryptographers." *Discrete Applied Mathematics*, 156(16), pp. 3113-3121, 2008. (Bilinear Pairings)
+
+- Secure pairing computation is based on the bilinearity property: e(P + Q, R) = e(P, R) * e(Q, R)
