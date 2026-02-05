@@ -71,6 +71,11 @@ class EcMpcSystem {
   // Scalar multiplication: k * [P] = [k*P] (where k is a public plaintext scalar)
   EcPointShare MulScalar(const yacl::math::MPInt& scalar, const EcPointShare& point);
 
+  // Secret scalar times public point: [k] * P = [k*P] (where [k] is secret-shared, P is public)
+  // Simple protocol: each party computes k_i * P and shares it, then combine
+  // [k*P] = Σ_i [k_i * P]_i where k_i is party i's share of [k]
+  EcPointShare MulSecretScalarPublicPoint(const SecretShare& k_share, const yacl::crypto::EcPoint& public_point);
+
   // Secret scalar multiplication: [k] * [P] = [k*P] (where both k and P are secret-shared)
   // Implementation based on preprocessing method (similar to Beaver triple)
   // Protocol:

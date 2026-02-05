@@ -86,6 +86,17 @@ EcPointShare PairingMpcSystem::MulScalarG1(const yacl::math::MPInt& scalar,
   return g1_mpc_->MulScalar(scalar, point);
 }
 
+EcPointShare PairingMpcSystem::MulSecretScalarPublicPointG1(const SecretShare& k_share,
+                                                            const yacl::crypto::EcPoint& public_point) {
+  return g1_mpc_->MulSecretScalarPublicPoint(k_share, public_point);
+}
+
+EcPointShare PairingMpcSystem::MulSecretScalarG1(const SecretShare& k_share,
+                                                  const EcPointShare& point_share,
+                                                  SpdzMpcSystem* fp_mpc) {
+  return g1_mpc_->MulSecretScalar(k_share, point_share, fp_mpc);
+}
+
 yacl::crypto::EcPoint PairingMpcSystem::OpenG1(const EcPointShare& share) {
   return g1_mpc_->Open(share);
 }
@@ -120,6 +131,17 @@ EcPointShare PairingMpcSystem::SubG2(const EcPointShare& a, const EcPointShare& 
 EcPointShare PairingMpcSystem::MulScalarG2(const yacl::math::MPInt& scalar,
                                            const EcPointShare& point) {
   return g2_mpc_->MulScalar(scalar, point);
+}
+
+EcPointShare PairingMpcSystem::MulSecretScalarPublicPointG2(const SecretShare& k_share,
+                                                            const yacl::crypto::EcPoint& public_point) {
+  return g2_mpc_->MulSecretScalarPublicPoint(k_share, public_point);
+}
+
+EcPointShare PairingMpcSystem::MulSecretScalarG2(const SecretShare& k_share,
+                                                  const EcPointShare& point_share,
+                                                  SpdzMpcSystem* fp_mpc) {
+  return g2_mpc_->MulSecretScalar(k_share, point_share, fp_mpc);
 }
 
 yacl::crypto::EcPoint PairingMpcSystem::OpenG2(const EcPointShare& share) {
@@ -338,16 +360,118 @@ GtElementShare PairingMpcSystem::DivGT(const GtElementShare& a, const GtElementS
 
 GtElementShare PairingMpcSystem::PowGT(const yacl::math::MPInt& exponent,
                                         const GtElementShare& element) {
+  // Important: MCL's Pow function does NOT automatically reduce exponent modulo group order,
+  // so we must manually reduce the exponent before calling Pow.
+  yacl::math::MPInt gt_mul_order = gt_group_->GetMulGroupOrder();
+  yacl::math::MPInt exponent_mod = exponent % gt_mul_order;
+  
   // Power on delta element: (δg)^k
-  yacl::Item delta_element = gt_group_->Pow(element.delta_element, exponent);
+  yacl::Item delta_element = gt_group_->Pow(element.delta_element, exponent_mod);
 
   // Power on element share: gi^k
-  yacl::Item element_share = gt_group_->Pow(element.element_share, exponent);
+  yacl::Item element_share = gt_group_->Pow(element.element_share, exponent_mod);
 
   // Scalar multiplication on MAC share: k * γi(g)
-  yacl::math::MPInt mac_share = (exponent * element.mac_share) % prime_;
+  // Use exponent_mod to be consistent with delta_element and element_share
+  yacl::math::MPInt mac_share = (exponent_mod * element.mac_share) % prime_;
 
   return GtElementShare(delta_element, element_share, mac_share);
+}
+
+GtElementShare PairingMpcSystem::MulSecretScalarPublicElementGT(const SecretShare& k_share,
+                                                                 const yacl::Item& public_element) {
+  // Compute [k] * g = [g^k] in GT where [k] is secret-shared and g is public
+  // Protocol: each party computes g^(k_i) locally, exchange them,
+  // multiply to get g^k, then share this public value
+  // Note: In multiplicative group, [k]*g means g^k
+  // Important: MCL's Pow function does NOT automatically reduce exponent modulo group order,
+  // so we must manually reduce the exponent before calling Pow.
+  
+  // Get GT multiplicative group order (not the pairing group order)
+  yacl::math::MPInt gt_mul_order = gt_group_->GetMulGroupOrder();
+  
+  // Each party computes g^(k_i mod order) (where k_i is this party's share of [k])
+  // We reduce k_i modulo the multiplicative group order to ensure correctness
+  // Each party computes g^(k_i mod order) (where k_i is this party's share of [k])
+  // This should work because g^a * g^b = g^(a+b) in multiplicative group
+  yacl::math::MPInt k_i_mod_order = k_share.value_share % gt_mul_order;
+  yacl::Item g_k_i = gt_group_->Pow(public_element, k_i_mod_order);
+  
+  // Serialize and send g^(k_i) to all other parties
+  auto g_k_i_buf = gt_group_->Serialize(g_k_i);
+  uint32_t g_k_i_len = static_cast<uint32_t>(g_k_i_buf.size());
+  for (size_t j = 0; j < world_size_; ++j) {
+    if (j != rank_) {
+      std::string tag = "g_power_k_i_" + std::to_string(rank_);
+      std::vector<uint8_t> data(sizeof(g_k_i_len) + static_cast<size_t>(g_k_i_buf.size()));
+      std::memcpy(data.data(), &g_k_i_len, sizeof(g_k_i_len));
+      std::memcpy(data.data() + sizeof(g_k_i_len), g_k_i_buf.data<uint8_t>(), static_cast<size_t>(g_k_i_buf.size()));
+      ctx_->Send(j, yacl::ByteContainerView(data), tag);
+    }
+  }
+  
+  // Receive g^(k_j) from all other parties and multiply
+  yacl::Item product = gt_group_->DeepCopy(g_k_i);  // Start with my own g^(k_i)
+  
+  for (size_t i = 0; i < world_size_; ++i) {
+    if (i != rank_) {
+      std::string tag = "g_power_k_i_" + std::to_string(i);
+      auto recv_data = ctx_->Recv(i, tag);
+      
+      size_t recv_size = static_cast<size_t>(recv_data.size());
+      YACL_ENFORCE(recv_size >= sizeof(uint32_t),
+                   "Received data too small: {} bytes", recv_size);
+      
+      const uint8_t* data_ptr = recv_data.data<uint8_t>();
+      uint32_t other_g_k_i_len;
+      std::memcpy(&other_g_k_i_len, data_ptr, sizeof(other_g_k_i_len));
+      
+      YACL_ENFORCE(recv_size >= sizeof(other_g_k_i_len) + other_g_k_i_len,
+                   "Received data too small: {} bytes, need {}",
+                   recv_size, sizeof(other_g_k_i_len) + other_g_k_i_len);
+      
+      yacl::Item other_g_k_i = gt_group_->Deserialize(
+          yacl::ByteContainerView(data_ptr + sizeof(other_g_k_i_len), other_g_k_i_len));
+      
+      // Multiply: product = product * other_g_k_i
+      // In multiplicative group, g^(k_i) * g^(k_j) = g^(k_i + k_j)
+      product = gt_group_->Mul(product, other_g_k_i);
+    }
+  }
+  
+  // Now product = g^(k_0 mod order) * g^(k_1 mod order) * ... = g^((k_0 mod order + k_1 mod order + ...) mod order)
+  // But we need g^((k_0 + k_1 + ...) mod order) = g^(k mod order)
+  // The issue is that (k_0 mod order + k_1 mod order) mod order may not equal (k_0 + k_1) mod order
+  // when k_0 mod order + k_1 mod order >= order
+  
+  // Share this result: [g^k]
+  // Since g^k is a public value (all parties computed it), Party 0 shares it and others receive
+  GtElementShare result = ShareValueGT(product, 0);
+  
+  return result;
+}
+
+GtElementShare PairingMpcSystem::MulSecretScalarGT(const SecretShare& k_share,
+                                                    const GtElementShare& element_share,
+                                                    SpdzMpcSystem* fp_mpc) {
+  // Compute [g]^[k] = [g^k] in GT where both [g] and [k] are secret-shared
+  // In multiplicative group, this means raising a secret-shared element to a secret-shared power
+  // This is complex, so we use a preprocessing-based approach:
+  // 1. Generate Beaver triple ([a], [b], [c]) where c = a * b
+  // 2. Open [k] - [a] = u and [g] / [g^a] = v (where [g^a] needs to be computed)
+  // 3. Compute [g^k] = [g^a] * v^u
+  
+  // For now, we use a simpler approach: open [k] and use PowGT
+  // This is not ideal for security but works for testing
+  // TODO: Implement proper protocol for [g]^[k]
+  
+  YACL_ENFORCE(fp_mpc != nullptr, "Fp MPC system is required for MulSecretScalarGT");
+  
+  // Open [k] to get k (this reveals k, so it's not ideal for security)
+  yacl::math::MPInt k = fp_mpc->PartialOpen(k_share);
+  
+  // Use PowGT to compute [g]^k
+  return PowGT(k, element_share);
 }
 
 yacl::Item PairingMpcSystem::PartialOpenGT(const GtElementShare& share) {

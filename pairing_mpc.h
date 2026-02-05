@@ -78,6 +78,14 @@ class PairingMpcSystem {
   // MulScalar: k * [P] = [k*P] in G1 (k is public)
   EcPointShare MulScalarG1(const yacl::math::MPInt& scalar, const EcPointShare& point);
 
+  // MulSecretScalarPublicPoint: [k] * P = [k*P] in G1 ([k] is secret-shared, P is public)
+  // Simple protocol: each party computes k_i * P and shares it, then combine
+  EcPointShare MulSecretScalarPublicPointG1(const SecretShare& k_share, const yacl::crypto::EcPoint& public_point);
+
+  // MulSecretScalar: [k] * [P] = [k*P] in G1 (both [k] and [P] are secret-shared)
+  EcPointShare MulSecretScalarG1(const SecretShare& k_share, const EcPointShare& point_share,
+                                  SpdzMpcSystem* fp_mpc = nullptr);
+
   // Open: Open a shared point in G1
   yacl::crypto::EcPoint OpenG1(const EcPointShare& share);
 
@@ -104,6 +112,14 @@ class PairingMpcSystem {
   // MulScalar: k * [P] = [k*P] in G2 (k is public)
   EcPointShare MulScalarG2(const yacl::math::MPInt& scalar, const EcPointShare& point);
 
+  // MulSecretScalarPublicPoint: [k] * P = [k*P] in G2 ([k] is secret-shared, P is public)
+  // Simple protocol: each party computes k_i * P and shares it, then combine
+  EcPointShare MulSecretScalarPublicPointG2(const SecretShare& k_share, const yacl::crypto::EcPoint& public_point);
+
+  // MulSecretScalar: [k] * [P] = [k*P] in G2 (both [k] and [P] are secret-shared)
+  EcPointShare MulSecretScalarG2(const SecretShare& k_share, const EcPointShare& point_share,
+                                  SpdzMpcSystem* fp_mpc = nullptr);
+
   // Open: Open a shared point in G2
   yacl::crypto::EcPoint OpenG2(const EcPointShare& share);
 
@@ -129,6 +145,17 @@ class PairingMpcSystem {
 
   // Pow: [g]^k = [g^k] in GT (k is public)
   GtElementShare PowGT(const yacl::math::MPInt& exponent, const GtElementShare& element);
+
+  // MulSecretScalarPublicElement: [k] * g = [g^k] in GT ([k] is secret-shared, g is public)
+  // Protocol: each party computes g^(k_i) locally, exchange them, multiply to get g^k
+  // Note: In multiplicative group, [k]*g means g^k
+  GtElementShare MulSecretScalarPublicElementGT(const SecretShare& k_share, const yacl::Item& public_element);
+
+  // MulSecretScalar: [k] * [g] = [g^k] in GT (both [k] and [g] are secret-shared)
+  // Note: In multiplicative group, this means [g]^[k] = [g^k]
+  // Requires Fp MPC system for scalar operations
+  GtElementShare MulSecretScalarGT(const SecretShare& k_share, const GtElementShare& element_share,
+                                   SpdzMpcSystem* fp_mpc = nullptr);
 
   // Open: Open a shared element in GT
   yacl::Item OpenGT(const GtElementShare& share);

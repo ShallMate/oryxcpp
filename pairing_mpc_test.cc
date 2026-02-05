@@ -14,6 +14,7 @@
 
 #include "examples/oryxcpp/pairing_mpc.h"
 
+#include <chrono>
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -26,13 +27,59 @@
 
 namespace yacl::examples::pii {
 
+// Helper function to get total statistics from all contexts
+struct CommStats {
+  size_t sent_bytes = 0;
+  size_t sent_actions = 0;
+  size_t recv_bytes = 0;
+  size_t recv_actions = 0;
+};
+
+CommStats GetTotalStats(const std::vector<std::shared_ptr<yacl::link::Context>>& contexts) {
+  CommStats total;
+  for (const auto& ctx : contexts) {
+    auto stats = ctx->GetStats();
+    if (stats) {
+      total.sent_bytes += stats->sent_bytes.load();
+      total.sent_actions += stats->sent_actions.load();
+      total.recv_bytes += stats->recv_bytes.load();
+      total.recv_actions += stats->recv_actions.load();
+    }
+  }
+  return total;
+}
+
+// Helper function to print statistics
+void PrintStats(const CommStats& start_stats, const CommStats& end_stats,
+                const std::chrono::high_resolution_clock::time_point& start_time,
+                const std::chrono::high_resolution_clock::time_point& end_time,
+                const std::string& /* test_name */) {
+  auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+  auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+  size_t sent_bytes = end_stats.sent_bytes - start_stats.sent_bytes;
+  size_t sent_actions = end_stats.sent_actions - start_stats.sent_actions;
+  size_t recv_bytes = end_stats.recv_bytes - start_stats.recv_bytes;
+  size_t recv_actions = end_stats.recv_actions - start_stats.recv_actions;
+  
+  if (duration_ms.count() > 0) {
+    std::cout << "    Time: " << duration_ms.count() << " ms (" << duration_us.count() << " μs)" << std::endl;
+  } else {
+    std::cout << "    Time: < 1 ms (" << duration_us.count() << " μs)" << std::endl;
+  }
+  std::cout << "    Communication:" << std::endl;
+  std::cout << "      Sent: " << sent_bytes << " bytes (" << sent_actions << " actions)" << std::endl;
+  std::cout << "      Received: " << recv_bytes << " bytes (" << recv_actions << " actions)" << std::endl;
+  std::cout << "      Total: " << (sent_bytes + recv_bytes) << " bytes ("
+            << (sent_actions + recv_actions) << " actions)" << std::endl;
+}
+
+
 // Test RandomShare for G1
 void TestRandomShareG1(bool malicious_security, size_t world_size = 2) {
   std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
-  std::cout << "Testing RandomShare G1 (" << mode << ", " << world_size
-            << " parties)..." << std::endl;
+  std::cout << "Testing RandomShare G1 (" << mode << ", " << world_size << " parties)..." << std::endl;
 
-  auto contexts = yacl::link::test::SetupWorld(world_size);
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
   std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
   std::vector<std::thread> threads;
 
@@ -41,6 +88,10 @@ void TestRandomShareG1(bool malicious_security, size_t world_size = 2) {
   auto pairing_group = yacl::crypto::MclPGFactory::CreateByName("bls12-381");
   std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
       pairing_group.release());
+
+  // Record start time and stats
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
 
   for (size_t i = 0; i < world_size; ++i) {
     threads.emplace_back([&, i]() {
@@ -78,23 +129,26 @@ void TestRandomShareG1(bool malicious_security, size_t world_size = 2) {
     t.join();
   }
 
+  // Record end time and stats
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
   // All parties should get the same opened value
   for (size_t i = 1; i < world_size; ++i) {
     YACL_ENFORCE(g1->PointEqual(opened_values[0], opened_values[i]),
                  "RandomShare G1 test failed: parties disagree");
   }
 
-  std::cout << "  RandomShare G1 (" << mode << ", " << world_size
-            << " parties) test PASSED" << std::endl;
+  std::cout << "  RandomShare G1 (" << mode << ", " << world_size << " parties)..." << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "RandomShareG1");
 }
 
 // Test Add for G1
 void TestAddG1(bool malicious_security, size_t world_size = 2) {
   std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
-  std::cout << "Testing Add G1 (" << mode << ", " << world_size
-            << " parties)..." << std::endl;
+  std::cout << "Testing Add G1 (" << mode << ", " << world_size << " parties)..." << std::endl;
 
-  auto contexts = yacl::link::test::SetupWorld(world_size);
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
   std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
   std::vector<std::thread> threads;
 
@@ -103,6 +157,10 @@ void TestAddG1(bool malicious_security, size_t world_size = 2) {
   std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
       pairing_group.release());
   auto g1 = pairing_group_shared->GetGroup1();
+
+  // Record start time and stats
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
 
   for (size_t i = 0; i < world_size; ++i) {
     threads.emplace_back([&, i]() {
@@ -185,18 +243,21 @@ void TestAddG1(bool malicious_security, size_t world_size = 2) {
   bool matches = g1->PointEqual(results[0], expected);
   YACL_ENFORCE(matches, "Add G1 test failed: MPC result != plaintext computation");
 
+  // Record end time and stats
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
   std::cout << "  Add G1 (" << mode << ", " << world_size
-            << " parties) test PASSED (opened value matches plaintext: "
-            << (matches ? "YES" : "NO") << ")" << std::endl;
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "AddG1");
 }
 
 // Test RandomShare for G2
 void TestRandomShareG2(bool malicious_security, size_t world_size = 2) {
   std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
-  std::cout << "Testing RandomShare G2 (" << mode << ", " << world_size
-            << " parties)..." << std::endl;
+  std::cout << "Testing RandomShare G2 (" << mode << ", " << world_size << " parties)..." << std::endl;
 
-  auto contexts = yacl::link::test::SetupWorld(world_size);
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
   std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
   std::vector<std::thread> threads;
 
@@ -204,6 +265,10 @@ void TestRandomShareG2(bool malicious_security, size_t world_size = 2) {
   auto pairing_group = yacl::crypto::MclPGFactory::CreateByName("bls12-381");
   std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
       pairing_group.release());
+
+  // Record start time and stats
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
 
   for (size_t i = 0; i < world_size; ++i) {
     threads.emplace_back([&, i]() {
@@ -247,17 +312,20 @@ void TestRandomShareG2(bool malicious_security, size_t world_size = 2) {
                  "RandomShare G2 test failed: parties disagree");
   }
 
-  std::cout << "  RandomShare G2 (" << mode << ", " << world_size
-            << " parties) test PASSED" << std::endl;
+  // Record end time and stats
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
+  std::cout << "  RandomShare G2 (" << mode << ", " << world_size << " parties)..." << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "RandomShareG2");
 }
 
 // Test Add for G2
 void TestAddG2(bool malicious_security, size_t world_size = 2) {
   std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
-  std::cout << "Testing Add G2 (" << mode << ", " << world_size
-            << " parties)..." << std::endl;
+  std::cout << "Testing Add G2 (" << mode << ", " << world_size << " parties)..." << std::endl;
 
-  auto contexts = yacl::link::test::SetupWorld(world_size);
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
   std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
   std::vector<std::thread> threads;
 
@@ -266,6 +334,9 @@ void TestAddG2(bool malicious_security, size_t world_size = 2) {
   std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
       pairing_group.release());
   auto g2 = pairing_group_shared->GetGroup2();
+  // Record start time and stats
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
 
   for (size_t i = 0; i < world_size; ++i) {
     threads.emplace_back([&, i]() {
@@ -344,22 +415,593 @@ void TestAddG2(bool malicious_security, size_t world_size = 2) {
                  "Add G2 test failed: result != expected");
   }
 
+  // Record end time and stats
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
   // Verify: opened result matches plaintext computation
   bool matches = g2->PointEqual(results[0], expected);
   YACL_ENFORCE(matches, "Add G2 test failed: MPC result != plaintext computation");
-
+  
   std::cout << "  Add G2 (" << mode << ", " << world_size
-            << " parties) test PASSED (opened value matches plaintext: "
-            << (matches ? "YES" : "NO") << ")" << std::endl;
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "AddG2");
+}
+
+// Test MulScalarG1: k * [P] = [k*P] in G1 (k is public)
+void TestMulScalarG1(bool malicious_security, size_t world_size = 2) {
+  std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
+  std::cout << "Testing MulScalarG1 k[P] (" << mode << ", " << world_size << " parties)..." << std::endl;
+
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
+  std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
+  std::vector<std::thread> threads;
+
+  auto pairing_group = yacl::crypto::MclPGFactory::CreateByName("bls12-381");
+  std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
+      pairing_group.release());
+  auto g1 = pairing_group_shared->GetGroup1();
+
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
+
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      std::vector<std::shared_ptr<yacl::link::Context>> ctx_vec = {contexts[i]};
+      mpc_systems[i] = std::make_unique<PairingMpcSystem>(
+          i, world_size, ctx_vec, pairing_group_shared, malicious_security);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  yacl::math::MPInt scalar_k("5");
+  yacl::math::MPInt scalar_p("100");
+  yacl::crypto::EcPoint point_p = g1->MulBase(scalar_p);
+  yacl::crypto::EcPoint expected = g1->Mul(point_p, scalar_k);
+
+  std::vector<EcPointShare> share_p(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      if (i == 0) {
+        share_p[i] = mpc_systems[i]->ShareValueG1(point_p, 0);
+      } else {
+        yacl::math::MPInt zero(0);
+        yacl::crypto::EcPoint infinity = g1->MulBase(zero);
+        share_p[i] = mpc_systems[i]->ShareValueG1(infinity, 0);
+      }
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<EcPointShare> result_shares(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      result_shares[i] = mpc_systems[i]->MulScalarG1(scalar_k, share_p[i]);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<yacl::crypto::EcPoint> results(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      results[i] = mpc_systems[i]->OpenG1(result_shares[i]);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  for (size_t i = 1; i < world_size; ++i) {
+    YACL_ENFORCE(g1->PointEqual(results[0], results[i]),
+                 "MulScalarG1 test failed: parties disagree");
+    YACL_ENFORCE(g1->PointEqual(results[i], expected),
+                 "MulScalarG1 test failed: result != expected");
+  }
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
+  bool matches = g1->PointEqual(results[0], expected);
+  YACL_ENFORCE(matches, "MulScalarG1 test failed: MPC result != plaintext computation");
+  
+  std::cout << "  MulScalarG1 k[P] (" << mode << ", " << world_size
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "MulScalarG1");
+}
+
+// Test MulSecretScalarPublicPointG1: [k] * P = [k*P] in G1 ([k] is secret, P is public)
+void TestMulSecretScalarPublicPointG1(bool malicious_security, size_t world_size = 2) {
+  std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
+  std::cout << "Testing MulSecretScalarPublicPointG1 [k]P (" << mode << ", " << world_size << " parties)..." << std::endl;
+
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
+  std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
+  std::vector<std::unique_ptr<SpdzMpcSystem>> fp_mpc_systems(world_size);
+  std::vector<std::thread> threads;
+
+  auto pairing_group = yacl::crypto::MclPGFactory::CreateByName("bls12-381");
+  std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
+      pairing_group.release());
+  auto g1 = pairing_group_shared->GetGroup1();
+  yacl::math::MPInt order = pairing_group_shared->GetOrder();
+
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
+
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      std::vector<std::shared_ptr<yacl::link::Context>> ctx_vec = {contexts[i]};
+      mpc_systems[i] = std::make_unique<PairingMpcSystem>(
+          i, world_size, ctx_vec, pairing_group_shared, malicious_security);
+      fp_mpc_systems[i] = std::make_unique<SpdzMpcSystem>(
+          i, world_size, ctx_vec, malicious_security, &order);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  yacl::math::MPInt scalar_k("123");
+  yacl::math::MPInt scalar_p("100");
+  yacl::crypto::EcPoint public_point = g1->MulBase(scalar_p);
+  yacl::crypto::EcPoint expected = g1->Mul(public_point, scalar_k);
+
+  std::vector<SecretShare> share_k(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      if (i == 0) {
+        share_k[i] = fp_mpc_systems[i]->ShareMyValue(scalar_k);
+      } else {
+        share_k[i] = fp_mpc_systems[i]->ShareValue(yacl::math::MPInt(0), 0);
+      }
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<EcPointShare> result_shares(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      result_shares[i] = mpc_systems[i]->MulSecretScalarPublicPointG1(share_k[i], public_point);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<yacl::crypto::EcPoint> results(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      results[i] = mpc_systems[i]->OpenG1(result_shares[i]);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  for (size_t i = 1; i < world_size; ++i) {
+    YACL_ENFORCE(g1->PointEqual(results[0], results[i]),
+                 "MulSecretScalarPublicPointG1 test failed: parties disagree");
+    YACL_ENFORCE(g1->PointEqual(results[i], expected),
+                 "MulSecretScalarPublicPointG1 test failed: result != expected");
+  }
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
+  bool matches = g1->PointEqual(results[0], expected);
+  YACL_ENFORCE(matches, "MulSecretScalarPublicPointG1 test failed: MPC result != plaintext computation");
+  
+  std::cout << "  MulSecretScalarPublicPointG1 [k]P (" << mode << ", " << world_size
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "MulSecretScalarPublicPointG1");
+}
+
+// Test MulSecretScalarG1: [k] * [P] = [k*P] in G1 (both [k] and [P] are secret)
+void TestMulSecretScalarG1(bool malicious_security, size_t world_size = 2) {
+  std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
+  std::cout << "Testing MulSecretScalarG1 [k][P] (" << mode << ", " << world_size << " parties)..." << std::endl;
+
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
+  std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
+  std::vector<std::unique_ptr<SpdzMpcSystem>> fp_mpc_systems(world_size);
+  std::vector<std::thread> threads;
+
+  auto pairing_group = yacl::crypto::MclPGFactory::CreateByName("bls12-381");
+  std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
+      pairing_group.release());
+  auto g1 = pairing_group_shared->GetGroup1();
+  yacl::math::MPInt order = pairing_group_shared->GetOrder();
+
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
+
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      std::vector<std::shared_ptr<yacl::link::Context>> ctx_vec = {contexts[i]};
+      mpc_systems[i] = std::make_unique<PairingMpcSystem>(
+          i, world_size, ctx_vec, pairing_group_shared, malicious_security);
+      fp_mpc_systems[i] = std::make_unique<SpdzMpcSystem>(
+          i, world_size, ctx_vec, malicious_security, &order);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  yacl::math::MPInt scalar_k("123");
+  yacl::math::MPInt scalar_p("100");
+  yacl::crypto::EcPoint point_p = g1->MulBase(scalar_p);
+  yacl::crypto::EcPoint expected = g1->Mul(point_p, scalar_k);
+
+  std::vector<SecretShare> share_k(world_size);
+  std::vector<EcPointShare> share_p(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      if (i == 0) {
+        share_k[i] = fp_mpc_systems[i]->ShareMyValue(scalar_k);
+        yacl::math::MPInt zero(0);
+        yacl::crypto::EcPoint infinity = g1->MulBase(zero);
+        share_p[i] = mpc_systems[i]->ShareValueG1(infinity, 1);
+      } else if (i == 1) {
+        share_k[i] = fp_mpc_systems[i]->ShareValue(yacl::math::MPInt(0), 0);
+        share_p[i] = mpc_systems[i]->ShareMyValueG1(point_p);
+      } else {
+        share_k[i] = fp_mpc_systems[i]->ShareValue(yacl::math::MPInt(0), 0);
+        yacl::math::MPInt zero(0);
+        yacl::crypto::EcPoint infinity = g1->MulBase(zero);
+        share_p[i] = mpc_systems[i]->ShareValueG1(infinity, 1);
+      }
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<EcPointShare> result_shares(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      result_shares[i] = mpc_systems[i]->MulSecretScalarG1(share_k[i], share_p[i], fp_mpc_systems[i].get());
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<yacl::crypto::EcPoint> results(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      results[i] = mpc_systems[i]->OpenG1(result_shares[i]);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  for (size_t i = 1; i < world_size; ++i) {
+    YACL_ENFORCE(g1->PointEqual(results[0], results[i]),
+                 "MulSecretScalarG1 test failed: parties disagree");
+    YACL_ENFORCE(g1->PointEqual(results[i], expected),
+                 "MulSecretScalarG1 test failed: result != expected");
+  }
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
+  bool matches = g1->PointEqual(results[0], expected);
+  YACL_ENFORCE(matches, "MulSecretScalarG1 test failed: MPC result != plaintext computation");
+  
+  std::cout << "  MulSecretScalarG1 [k][P] (" << mode << ", " << world_size
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "MulSecretScalarG1");
+}
+
+// Test MulScalarG2: k * [P] = [k*P] in G2 (k is public)
+void TestMulScalarG2(bool malicious_security, size_t world_size = 2) {
+  std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
+  std::cout << "Testing MulScalarG2 k[P] (" << mode << ", " << world_size << " parties)..." << std::endl;
+
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
+  std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
+  std::vector<std::thread> threads;
+
+  auto pairing_group = yacl::crypto::MclPGFactory::CreateByName("bls12-381");
+  std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
+      pairing_group.release());
+  auto g2 = pairing_group_shared->GetGroup2();
+
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
+
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      std::vector<std::shared_ptr<yacl::link::Context>> ctx_vec = {contexts[i]};
+      mpc_systems[i] = std::make_unique<PairingMpcSystem>(
+          i, world_size, ctx_vec, pairing_group_shared, malicious_security);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  yacl::math::MPInt scalar_k("5");
+  yacl::math::MPInt scalar_p("100");
+  yacl::crypto::EcPoint point_p = g2->MulBase(scalar_p);
+  yacl::crypto::EcPoint expected = g2->Mul(point_p, scalar_k);
+
+  std::vector<EcPointShare> share_p(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      if (i == 0) {
+        share_p[i] = mpc_systems[i]->ShareValueG2(point_p, 0);
+      } else {
+        yacl::math::MPInt zero(0);
+        yacl::crypto::EcPoint infinity = g2->MulBase(zero);
+        share_p[i] = mpc_systems[i]->ShareValueG2(infinity, 0);
+      }
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<EcPointShare> result_shares(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      result_shares[i] = mpc_systems[i]->MulScalarG2(scalar_k, share_p[i]);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<yacl::crypto::EcPoint> results(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      results[i] = mpc_systems[i]->OpenG2(result_shares[i]);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  for (size_t i = 1; i < world_size; ++i) {
+    YACL_ENFORCE(g2->PointEqual(results[0], results[i]),
+                 "MulScalarG2 test failed: parties disagree");
+    YACL_ENFORCE(g2->PointEqual(results[i], expected),
+                 "MulScalarG2 test failed: result != expected");
+  }
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
+  bool matches = g2->PointEqual(results[0], expected);
+  YACL_ENFORCE(matches, "MulScalarG2 test failed: MPC result != plaintext computation");
+  
+  std::cout << "  MulScalarG2 k[P] (" << mode << ", " << world_size
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "MulScalarG2");
+}
+
+// Test MulSecretScalarPublicPointG2: [k] * P = [k*P] in G2 ([k] is secret, P is public)
+void TestMulSecretScalarPublicPointG2(bool malicious_security, size_t world_size = 2) {
+  std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
+  std::cout << "Testing MulSecretScalarPublicPointG2 [k]P (" << mode << ", " << world_size << " parties)..." << std::endl;
+
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
+  std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
+  std::vector<std::unique_ptr<SpdzMpcSystem>> fp_mpc_systems(world_size);
+  std::vector<std::thread> threads;
+
+  auto pairing_group = yacl::crypto::MclPGFactory::CreateByName("bls12-381");
+  std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
+      pairing_group.release());
+  auto g2 = pairing_group_shared->GetGroup2();
+  yacl::math::MPInt order = pairing_group_shared->GetOrder();
+
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
+
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      std::vector<std::shared_ptr<yacl::link::Context>> ctx_vec = {contexts[i]};
+      mpc_systems[i] = std::make_unique<PairingMpcSystem>(
+          i, world_size, ctx_vec, pairing_group_shared, malicious_security);
+      fp_mpc_systems[i] = std::make_unique<SpdzMpcSystem>(
+          i, world_size, ctx_vec, malicious_security, &order);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  yacl::math::MPInt scalar_k("123");
+  yacl::math::MPInt scalar_p("100");
+  yacl::crypto::EcPoint public_point = g2->MulBase(scalar_p);
+  yacl::crypto::EcPoint expected = g2->Mul(public_point, scalar_k);
+
+  std::vector<SecretShare> share_k(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      if (i == 0) {
+        share_k[i] = fp_mpc_systems[i]->ShareMyValue(scalar_k);
+      } else {
+        share_k[i] = fp_mpc_systems[i]->ShareValue(yacl::math::MPInt(0), 0);
+      }
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<EcPointShare> result_shares(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      result_shares[i] = mpc_systems[i]->MulSecretScalarPublicPointG2(share_k[i], public_point);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<yacl::crypto::EcPoint> results(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      results[i] = mpc_systems[i]->OpenG2(result_shares[i]);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  for (size_t i = 1; i < world_size; ++i) {
+    YACL_ENFORCE(g2->PointEqual(results[0], results[i]),
+                 "MulSecretScalarPublicPointG2 test failed: parties disagree");
+    YACL_ENFORCE(g2->PointEqual(results[i], expected),
+                 "MulSecretScalarPublicPointG2 test failed: result != expected");
+  }
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
+  bool matches = g2->PointEqual(results[0], expected);
+  YACL_ENFORCE(matches, "MulSecretScalarPublicPointG2 test failed: MPC result != plaintext computation");
+  
+  std::cout << "  MulSecretScalarPublicPointG2 [k]P (" << mode << ", " << world_size
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "MulSecretScalarPublicPointG2");
+}
+
+// Test MulSecretScalarG2: [k] * [P] = [k*P] in G2 (both [k] and [P] are secret)
+void TestMulSecretScalarG2(bool malicious_security, size_t world_size = 2) {
+  std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
+  std::cout << "Testing MulSecretScalarG2 [k][P] (" << mode << ", " << world_size << " parties)..." << std::endl;
+
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
+  std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
+  std::vector<std::unique_ptr<SpdzMpcSystem>> fp_mpc_systems(world_size);
+  std::vector<std::thread> threads;
+
+  auto pairing_group = yacl::crypto::MclPGFactory::CreateByName("bls12-381");
+  std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
+      pairing_group.release());
+  auto g2 = pairing_group_shared->GetGroup2();
+  yacl::math::MPInt order = pairing_group_shared->GetOrder();
+
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
+
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      std::vector<std::shared_ptr<yacl::link::Context>> ctx_vec = {contexts[i]};
+      mpc_systems[i] = std::make_unique<PairingMpcSystem>(
+          i, world_size, ctx_vec, pairing_group_shared, malicious_security);
+      fp_mpc_systems[i] = std::make_unique<SpdzMpcSystem>(
+          i, world_size, ctx_vec, malicious_security, &order);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  yacl::math::MPInt scalar_k("123");
+  yacl::math::MPInt scalar_p("100");
+  yacl::crypto::EcPoint point_p = g2->MulBase(scalar_p);
+  yacl::crypto::EcPoint expected = g2->Mul(point_p, scalar_k);
+
+  std::vector<SecretShare> share_k(world_size);
+  std::vector<EcPointShare> share_p(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      if (i == 0) {
+        share_k[i] = fp_mpc_systems[i]->ShareMyValue(scalar_k);
+        yacl::math::MPInt zero(0);
+        yacl::crypto::EcPoint infinity = g2->MulBase(zero);
+        share_p[i] = mpc_systems[i]->ShareValueG2(infinity, 1);
+      } else if (i == 1) {
+        share_k[i] = fp_mpc_systems[i]->ShareValue(yacl::math::MPInt(0), 0);
+        share_p[i] = mpc_systems[i]->ShareMyValueG2(point_p);
+      } else {
+        share_k[i] = fp_mpc_systems[i]->ShareValue(yacl::math::MPInt(0), 0);
+        yacl::math::MPInt zero(0);
+        yacl::crypto::EcPoint infinity = g2->MulBase(zero);
+        share_p[i] = mpc_systems[i]->ShareValueG2(infinity, 1);
+      }
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<EcPointShare> result_shares(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      result_shares[i] = mpc_systems[i]->MulSecretScalarG2(share_k[i], share_p[i], fp_mpc_systems[i].get());
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<yacl::crypto::EcPoint> results(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      results[i] = mpc_systems[i]->OpenG2(result_shares[i]);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  for (size_t i = 1; i < world_size; ++i) {
+    YACL_ENFORCE(g2->PointEqual(results[0], results[i]),
+                 "MulSecretScalarG2 test failed: parties disagree");
+    YACL_ENFORCE(g2->PointEqual(results[i], expected),
+                 "MulSecretScalarG2 test failed: result != expected");
+  }
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
+  bool matches = g2->PointEqual(results[0], expected);
+  YACL_ENFORCE(matches, "MulSecretScalarG2 test failed: MPC result != plaintext computation");
+  
+  std::cout << "  MulSecretScalarG2 [k][P] (" << mode << ", " << world_size
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "MulSecretScalarG2");
 }
 
 // Test Mul for GT
 void TestMulGT(bool malicious_security, size_t world_size = 2) {
   std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
-  std::cout << "Testing Mul GT (" << mode << ", " << world_size
-            << " parties)..." << std::endl;
+  std::cout << "Testing Mul GT (" << mode << ", " << world_size << " parties)..." << std::endl;
 
-  auto contexts = yacl::link::test::SetupWorld(world_size);
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
   std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
   std::vector<std::thread> threads;
 
@@ -368,6 +1010,9 @@ void TestMulGT(bool malicious_security, size_t world_size = 2) {
   std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
       pairing_group.release());
   auto gt = pairing_group_shared->GetGroupT();
+  // Record start time and stats
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
 
   for (size_t i = 0; i < world_size; ++i) {
     threads.emplace_back([&, i]() {
@@ -453,22 +1098,397 @@ void TestMulGT(bool malicious_security, size_t world_size = 2) {
                  "Mul GT test failed: result != expected");
   }
 
+  // Record end time and stats
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
   // Verify: opened result matches plaintext computation
   bool matches = gt->Equal(results[0], expected);
   YACL_ENFORCE(matches, "Mul GT test failed: MPC result != plaintext computation");
-
+  
   std::cout << "  Mul GT (" << mode << ", " << world_size
-            << " parties) test PASSED (opened value matches plaintext: "
-            << (matches ? "YES" : "NO") << ")" << std::endl;
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "MulGT");
+}
+
+// Test PowGT: g^k in GT (k is public)
+void TestPowGT(bool malicious_security, size_t world_size = 2) {
+  std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
+  std::cout << "Testing PowGT g^k (" << mode << ", " << world_size << " parties)..." << std::endl;
+
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
+  std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
+  std::vector<std::thread> threads;
+
+  auto pairing_group = yacl::crypto::MclPGFactory::CreateByName("bls12-381");
+  std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
+      pairing_group.release());
+  auto gt = pairing_group_shared->GetGroupT();
+
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
+
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      std::vector<std::shared_ptr<yacl::link::Context>> ctx_vec = {contexts[i]};
+      mpc_systems[i] = std::make_unique<PairingMpcSystem>(
+          i, world_size, ctx_vec, pairing_group_shared, malicious_security);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  yacl::math::MPInt exponent_k("5");
+  // Use Pairing(g1, g2) to get a generator of GT group, not a random element
+  // This ensures g^order = 1, which is required for the protocol to work correctly
+  auto g1 = pairing_group_shared->GetGroup1()->GetGenerator();
+  auto g2 = pairing_group_shared->GetGroup2()->GetGenerator();
+  yacl::Item element_g = pairing_group_shared->Pairing(g1, g2);
+  yacl::Item expected = gt->Pow(element_g, exponent_k);
+
+  yacl::Item identity = gt->GetIdentityOne();
+  yacl::math::MPInt zero(0);
+  GtElementShare init_share(identity, identity, zero);
+  std::vector<GtElementShare> share_g(world_size, init_share);
+
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      if (i == 0) {
+        share_g[i] = mpc_systems[i]->ShareMyValueGT(element_g);
+      } else {
+        share_g[i] = mpc_systems[i]->ShareValueGT(identity, 0);
+      }
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<GtElementShare> result_shares(world_size, init_share);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      result_shares[i] = mpc_systems[i]->PowGT(exponent_k, share_g[i]);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<yacl::Item> results;
+  results.reserve(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      yacl::Item result = mpc_systems[i]->OpenGT(result_shares[i]);
+      if (i == 0) {
+        results.push_back(result);
+      } else {
+        results.push_back(gt->DeepCopy(result));
+      }
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  for (size_t i = 1; i < world_size; ++i) {
+    YACL_ENFORCE(gt->Equal(results[0], results[i]),
+                 "PowGT test failed: parties disagree");
+    YACL_ENFORCE(gt->Equal(results[i], expected),
+                 "PowGT test failed: result != expected");
+  }
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
+  bool matches = gt->Equal(results[0], expected);
+  YACL_ENFORCE(matches, "PowGT test failed: MPC result != plaintext computation");
+  
+  std::cout << "  PowGT g^k (" << mode << ", " << world_size
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "PowGT");
+}
+
+// Test MulSecretScalarPublicElementGT: [k] * g = [g^k] in GT ([k] is secret, g is public)
+void TestMulSecretScalarPublicElementGT(bool malicious_security, size_t world_size = 2) {
+  std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
+  std::cout << "Testing MulSecretScalarPublicElementGT [k]g (" << mode << ", " << world_size << " parties)..." << std::endl;
+
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
+  std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
+  std::vector<std::unique_ptr<SpdzMpcSystem>> fp_mpc_systems(world_size);
+  std::vector<std::thread> threads;
+
+  auto pairing_group = yacl::crypto::MclPGFactory::CreateByName("bls12-381");
+  std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
+      pairing_group.release());
+  auto gt = pairing_group_shared->GetGroupT();
+  yacl::math::MPInt order = pairing_group_shared->GetOrder();
+
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
+
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      std::vector<std::shared_ptr<yacl::link::Context>> ctx_vec = {contexts[i]};
+      mpc_systems[i] = std::make_unique<PairingMpcSystem>(
+          i, world_size, ctx_vec, pairing_group_shared, malicious_security);
+      fp_mpc_systems[i] = std::make_unique<SpdzMpcSystem>(
+          i, world_size, ctx_vec, malicious_security, &order);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  yacl::math::MPInt scalar_k("123");
+  // Use Pairing(g1, g2) to get a generator of GT group, not a random element
+  // This ensures g^order = 1, which is required for the protocol to work correctly
+  auto g1 = pairing_group_shared->GetGroup1()->GetGenerator();
+  auto g2 = pairing_group_shared->GetGroup2()->GetGenerator();
+  yacl::Item public_element = pairing_group_shared->Pairing(g1, g2);
+  yacl::Item expected = gt->Pow(public_element, scalar_k);
+  
+  yacl::math::MPInt prime = fp_mpc_systems[0]->GetPrime();
+
+  std::vector<SecretShare> share_k(world_size);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      if (i == 0) {
+        share_k[i] = fp_mpc_systems[i]->ShareMyValue(scalar_k);
+      } else {
+        share_k[i] = fp_mpc_systems[i]->ShareValue(yacl::math::MPInt(0), 0);
+      }
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+  
+  // Verify sum of shares
+  yacl::math::MPInt sum_shares(0);
+  for (size_t i = 0; i < world_size; ++i) {
+    sum_shares = (sum_shares + share_k[i].value_share) % prime;
+  }
+  
+  // Compute expected using sum_shares (mod GT order) to verify
+  yacl::math::MPInt k_for_exponent = sum_shares % order;
+  yacl::Item expected_from_shares = gt->Pow(public_element, k_for_exponent);  // Verify: g^(k_0) * g^(k_1) should equal g^(k_0 + k_1)
+  yacl::math::MPInt k0_mod_order = share_k[0].value_share % order;
+  yacl::math::MPInt k1_mod_order = share_k[1].value_share % order;
+  yacl::math::MPInt k0_plus_k1 = (share_k[0].value_share + share_k[1].value_share) % order;
+  yacl::math::MPInt k0_mod_plus_k1_mod = (k0_mod_order + k1_mod_order) % order;
+  
+  yacl::math::MPInt k0_mod_plus_k1_mod_raw = k0_mod_order + k1_mod_order;
+  
+  // Check if we should use GetMulGroupOrder() instead of GetOrder()
+  yacl::math::MPInt mul_group_order = gt->GetMulGroupOrder();
+  
+  yacl::Item g_k0 = gt->Pow(public_element, k0_mod_order);
+  yacl::Item g_k1 = gt->Pow(public_element, k1_mod_order);
+  yacl::Item g_k0_times_g_k1 = gt->Mul(g_k0, g_k1);
+  yacl::Item g_k0_plus_k1 = gt->Pow(public_element, k0_plus_k1);
+  yacl::Item g_k0_mod_plus_k1_mod = gt->Pow(public_element, k0_mod_plus_k1_mod);  // Test: Does Pow automatically reduce exponent modulo order?
+  yacl::Item g_k0_raw = gt->Pow(public_element, share_k[0].value_share);
+  yacl::Item g_k0_mod = gt->Pow(public_element, k0_mod_order);  // Test: Try using k_0 + k_1 directly (without mod) to see if that works
+  yacl::math::MPInt k0_plus_k1_raw = share_k[0].value_share + share_k[1].value_share;
+  yacl::Item g_k0_plus_k1_raw = gt->Pow(public_element, k0_plus_k1_raw);  // Test: Simple test - does g^a * g^b = g^(a+b) for small values?
+  yacl::math::MPInt test_a("10");
+  yacl::math::MPInt test_b("20");
+  yacl::math::MPInt test_a_plus_b("30");
+  yacl::Item g_test_a = gt->Pow(public_element, test_a);
+  yacl::Item g_test_b = gt->Pow(public_element, test_b);
+  yacl::Item g_test_a_times_b = gt->Mul(g_test_a, g_test_b);
+  yacl::Item g_test_a_plus_b = gt->Pow(public_element, test_a_plus_b);  // Test: Does g^(a mod order) * g^(b mod order) = g^((a+b) mod order) for small values?
+  yacl::math::MPInt test_a_mod = test_a % order;
+  yacl::math::MPInt test_b_mod = test_b % order;
+  yacl::math::MPInt test_a_plus_b_mod = (test_a + test_b) % order;
+  yacl::Item g_test_a_mod = gt->Pow(public_element, test_a_mod);
+  yacl::Item g_test_b_mod = gt->Pow(public_element, test_b_mod);
+  yacl::Item g_test_a_mod_times_b_mod = gt->Mul(g_test_a_mod, g_test_b_mod);
+  yacl::Item g_test_a_plus_b_mod = gt->Pow(public_element, test_a_plus_b_mod);  // Test: Does g^(a mod order) * g^(b mod order) = g^((a mod order + b mod order) mod order) when a+b >= order?
+  // Use values similar to k_0 mod order and k_1 mod order
+  yacl::math::MPInt test_large_a = k0_mod_order;
+  yacl::math::MPInt test_large_b = k1_mod_order;
+  yacl::math::MPInt test_large_sum = (test_large_a + test_large_b) % order;
+  yacl::Item g_test_large_a = gt->Pow(public_element, test_large_a);
+  yacl::Item g_test_large_b = gt->Pow(public_element, test_large_b);
+  yacl::Item g_test_large_a_times_b = gt->Mul(g_test_large_a, g_test_large_b);
+  yacl::Item g_test_large_sum = gt->Pow(public_element, test_large_sum);  // Test: When a + b = order + c, does g^a * g^b = g^c?
+  // This tests if MCL's pow automatically reduces exponent modulo order
+  yacl::math::MPInt test_a_equals_order_minus_10 = order - yacl::math::MPInt("10");
+  yacl::math::MPInt test_b_equals_20("20");
+  yacl::math::MPInt test_c_equals_10("10");
+  yacl::Item g_test_a_order = gt->Pow(public_element, test_a_equals_order_minus_10);
+  yacl::Item g_test_b_order = gt->Pow(public_element, test_b_equals_20);
+  yacl::Item g_test_a_times_b_order = gt->Mul(g_test_a_order, g_test_b_order);
+  yacl::Item g_test_c_order = gt->Pow(public_element, test_c_equals_10);  // Test: Does g^order = 1?
+  yacl::Item g_order = gt->Pow(public_element, order);
+  yacl::Item identity_one = gt->GetIdentityOne();  // Test: Does g^(order + c) = g^c?
+  yacl::math::MPInt test_order_plus_c = order + test_c_equals_10;
+  yacl::Item g_order_plus_c = gt->Pow(public_element, test_order_plus_c);  yacl::Item identity = gt->GetIdentityOne();
+  yacl::math::MPInt zero(0);
+  GtElementShare init_share(identity, identity, zero);
+  std::vector<GtElementShare> result_shares(world_size, init_share);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      result_shares[i] = mpc_systems[i]->MulSecretScalarPublicElementGT(share_k[i], public_element);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<yacl::Item> results;
+  yacl::Item identity_temp = gt->GetIdentityOne();
+  for (size_t i = 0; i < world_size; ++i) {
+    results.push_back(gt->DeepCopy(identity_temp));
+  }
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      results[i] = mpc_systems[i]->OpenGT(result_shares[i]);
+    });
+  }
+    for (auto& t : threads) {
+    t.join();
+  }
+
+  for (size_t i = 1; i < world_size; ++i) {
+    YACL_ENFORCE(gt->Equal(results[0], results[i]),
+                 "MulSecretScalarPublicElementGT test failed: parties disagree");
+    
+        YACL_ENFORCE(gt->Equal(results[i], expected),
+                 "MulSecretScalarPublicElementGT test failed: result != expected");
+  }
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
+  bool matches = gt->Equal(results[0], expected);
+  YACL_ENFORCE(matches, "MulSecretScalarPublicElementGT test failed: MPC result != plaintext computation");
+  
+  std::cout << "  MulSecretScalarPublicElementGT [k]g (" << mode << ", " << world_size
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "MulSecretScalarPublicElementGT");
+}
+
+// Test MulSecretScalarGT: [k] * [g] = [g^k] in GT (both [k] and [g] are secret)
+void TestMulSecretScalarGT(bool malicious_security, size_t world_size = 2) {
+  std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
+  std::cout << "Testing MulSecretScalarGT [k][g] (" << mode << ", " << world_size << " parties)..." << std::endl;
+
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
+  std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
+  std::vector<std::unique_ptr<SpdzMpcSystem>> fp_mpc_systems(world_size);
+  std::vector<std::thread> threads;
+
+  auto pairing_group = yacl::crypto::MclPGFactory::CreateByName("bls12-381");
+  std::shared_ptr<yacl::crypto::PairingGroup> pairing_group_shared(
+      pairing_group.release());
+  auto gt = pairing_group_shared->GetGroupT();
+  yacl::math::MPInt order = pairing_group_shared->GetOrder();
+
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
+
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      std::vector<std::shared_ptr<yacl::link::Context>> ctx_vec = {contexts[i]};
+      mpc_systems[i] = std::make_unique<PairingMpcSystem>(
+          i, world_size, ctx_vec, pairing_group_shared, malicious_security);
+      fp_mpc_systems[i] = std::make_unique<SpdzMpcSystem>(
+          i, world_size, ctx_vec, malicious_security, &order);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  yacl::math::MPInt scalar_k("123");
+  yacl::Item element_g = gt->Random();
+  yacl::Item expected = gt->Pow(element_g, scalar_k);
+
+  std::vector<SecretShare> share_k(world_size);
+  yacl::Item identity = gt->GetIdentityOne();
+  yacl::math::MPInt zero(0);
+  GtElementShare init_share(identity, identity, zero);
+  std::vector<GtElementShare> share_g(world_size, init_share);
+
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      if (i == 0) {
+        share_k[i] = fp_mpc_systems[i]->ShareMyValue(scalar_k);
+        share_g[i] = mpc_systems[i]->ShareValueGT(identity, 1);
+      } else if (i == 1) {
+        share_k[i] = fp_mpc_systems[i]->ShareValue(yacl::math::MPInt(0), 0);
+        share_g[i] = mpc_systems[i]->ShareMyValueGT(element_g);
+      } else {
+        share_k[i] = fp_mpc_systems[i]->ShareValue(yacl::math::MPInt(0), 0);
+        share_g[i] = mpc_systems[i]->ShareValueGT(identity, 1);
+      }
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<GtElementShare> result_shares(world_size, init_share);
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      result_shares[i] = mpc_systems[i]->MulSecretScalarGT(share_k[i], share_g[i], fp_mpc_systems[i].get());
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  std::vector<yacl::Item> results;
+  yacl::Item identity_temp = gt->GetIdentityOne();
+  for (size_t i = 0; i < world_size; ++i) {
+    results.push_back(gt->DeepCopy(identity_temp));
+  }
+  threads.clear();
+  for (size_t i = 0; i < world_size; ++i) {
+    threads.emplace_back([&, i]() {
+      results[i] = mpc_systems[i]->OpenGT(result_shares[i]);
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  for (size_t i = 1; i < world_size; ++i) {
+    YACL_ENFORCE(gt->Equal(results[0], results[i]),
+                 "MulSecretScalarGT test failed: parties disagree");
+    YACL_ENFORCE(gt->Equal(results[i], expected),
+                 "MulSecretScalarGT test failed: result != expected");
+  }
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
+  bool matches = gt->Equal(results[0], expected);
+  YACL_ENFORCE(matches, "MulSecretScalarGT test failed: MPC result != plaintext computation");
+  
+  std::cout << "  MulSecretScalarGT [k][g] (" << mode << ", " << world_size
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "MulSecretScalarGT");
 }
 
 // Test SecPair1: e([P], Q) where [P] ∈ G1 is secret-shared, Q ∈ G2 is public
 void TestPairingSecretG1(bool malicious_security, size_t world_size = 2) {
   std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
-  std::cout << "Testing SecPair1 e([P], Q) (" << mode << ", " << world_size
-            << " parties)..." << std::endl;
+  std::cout << "Testing SecPair1 e([P], Q) (" << mode << ", " << world_size << " parties)..." << std::endl;
 
-  auto contexts = yacl::link::test::SetupWorld(world_size);
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
   std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
   std::vector<std::thread> threads;
 
@@ -478,6 +1498,9 @@ void TestPairingSecretG1(bool malicious_security, size_t world_size = 2) {
   auto g1 = pairing_group_shared->GetGroup1();
   auto g2 = pairing_group_shared->GetGroup2();
   auto gt = pairing_group_shared->GetGroupT();
+  // Record start time and stats
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
 
   for (size_t i = 0; i < world_size; ++i) {
     threads.emplace_back([&, i]() {
@@ -556,21 +1579,24 @@ void TestPairingSecretG1(bool malicious_security, size_t world_size = 2) {
                  "SecPair1 test failed: result != expected");
   }
 
+  // Record end time and stats
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
   bool matches = gt->Equal(results[0], expected);
   YACL_ENFORCE(matches, "SecPair1 test failed: MPC result != plaintext computation");
 
   std::cout << "  SecPair1 e([P], Q) (" << mode << ", " << world_size
-            << " parties) test PASSED (opened value matches plaintext: "
-            << (matches ? "YES" : "NO") << ")" << std::endl;
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "PairingSecretG1");
 }
 
 // Test SecPair2: e(P, [Q]) where P ∈ G1 is public, [Q] ∈ G2 is secret-shared
 void TestPairingSecretG2(bool malicious_security, size_t world_size = 2) {
   std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
-  std::cout << "Testing SecPair2 e(P, [Q]) (" << mode << ", " << world_size
-            << " parties)..." << std::endl;
+  std::cout << "Testing SecPair2 e(P, [Q]) (" << mode << ", " << world_size << " parties)..." << std::endl;
 
-  auto contexts = yacl::link::test::SetupWorld(world_size);
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
   std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
   std::vector<std::thread> threads;
 
@@ -580,6 +1606,9 @@ void TestPairingSecretG2(bool malicious_security, size_t world_size = 2) {
   auto g1 = pairing_group_shared->GetGroup1();
   auto g2 = pairing_group_shared->GetGroup2();
   auto gt = pairing_group_shared->GetGroupT();
+  // Record start time and stats
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
 
   for (size_t i = 0; i < world_size; ++i) {
     threads.emplace_back([&, i]() {
@@ -646,6 +1675,10 @@ void TestPairingSecretG2(bool malicious_security, size_t world_size = 2) {
     t.join();
   }
 
+  // Record end time and stats
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
   // All parties should agree and result should be e(P, Q)
   for (size_t i = 1; i < world_size; ++i) {
     YACL_ENFORCE(gt->Equal(results[0], results[i]),
@@ -656,19 +1689,18 @@ void TestPairingSecretG2(bool malicious_security, size_t world_size = 2) {
 
   bool matches = gt->Equal(results[0], expected);
   YACL_ENFORCE(matches, "SecPair2 test failed: MPC result != plaintext computation");
-
+  
   std::cout << "  SecPair2 e(P, [Q]) (" << mode << ", " << world_size
-            << " parties) test PASSED (opened value matches plaintext: "
-            << (matches ? "YES" : "NO") << ")" << std::endl;
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "PairingSecretG2");
 }
 
 // Test SecPair3: e([P], [Q]) where both [P] ∈ G1 and [Q] ∈ G2 are secret-shared
 void TestPairingSecret(bool malicious_security, size_t world_size = 2) {
   std::string mode = malicious_security ? "Malicious" : "Semi-Honest";
-  std::cout << "Testing SecPair3 e([P], [Q]) (" << mode << ", " << world_size
-            << " parties)..." << std::endl;
+  std::cout << "Testing SecPair3 e([P], [Q]) (" << mode << ", " << world_size << " parties)..." << std::endl;
 
-  auto contexts = yacl::link::test::SetupWorld(world_size);
+  auto contexts = yacl::link::test::SetupBrpcWorld(world_size);
   std::vector<std::unique_ptr<PairingMpcSystem>> mpc_systems(world_size);
   std::vector<std::unique_ptr<SpdzMpcSystem>> fp_mpc_systems(world_size);
   std::vector<std::thread> threads;
@@ -680,6 +1712,9 @@ void TestPairingSecret(bool malicious_security, size_t world_size = 2) {
   auto g2 = pairing_group_shared->GetGroup2();
   auto gt = pairing_group_shared->GetGroupT();
   auto order = pairing_group_shared->GetOrder();
+  // Record start time and stats
+  auto start_time = std::chrono::high_resolution_clock::now();
+  auto start_stats = GetTotalStats(contexts);
 
   for (size_t i = 0; i < world_size; ++i) {
     threads.emplace_back([&, i]() {
@@ -776,54 +1811,67 @@ void TestPairingSecret(bool malicious_security, size_t world_size = 2) {
                  "SecPair3 test failed: result != expected");
   }
 
+  // Record end time and stats
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto end_stats = GetTotalStats(contexts);
+
   bool matches = gt->Equal(results[0], expected);
   YACL_ENFORCE(matches, "SecPair3 test failed: MPC result != plaintext computation");
 
   std::cout << "  SecPair3 e([P], [Q]) (" << mode << ", " << world_size
-            << " parties) test PASSED (opened value matches plaintext: "
-            << (matches ? "YES" : "NO") << ")" << std::endl;
+            << " parties) test PASSED (opened value matches plaintext: " << std::endl;
+  PrintStats(start_stats, end_stats, start_time, end_time, "PairingSecret");
 }
 
 }  // namespace yacl::examples::pii
 
 int main() {
-  std::cout << "=== Bilinear Pairing Groups MPC Tests ===" << std::endl;
-  std::cout << std::endl;
 
   // Test with different world sizes
   std::vector<size_t> world_sizes = {2, 3, 4};
 
   for (size_t world_size : world_sizes) {
-    std::cout << "=== Testing with " << world_size << " parties ===" << std::endl;
-    std::cout << std::endl;
 
     // Semi-Honest Security Tests
-    std::cout << "--- Semi-Honest Security Tests (" << world_size
-              << " parties) ---" << std::endl;
+    std::cout << "--- Semi-Honest Security Tests (" << world_size << " parties) ---" << std::endl << std::endl;
     yacl::examples::pii::TestRandomShareG1(false, world_size);
     yacl::examples::pii::TestAddG1(false, world_size);
+    yacl::examples::pii::TestMulScalarG1(false, world_size);
+    yacl::examples::pii::TestMulSecretScalarPublicPointG1(false, world_size);
+    yacl::examples::pii::TestMulSecretScalarG1(false, world_size);
     yacl::examples::pii::TestRandomShareG2(false, world_size);
     yacl::examples::pii::TestAddG2(false, world_size);
+    yacl::examples::pii::TestMulScalarG2(false, world_size);
+    yacl::examples::pii::TestMulSecretScalarPublicPointG2(false, world_size);
+    yacl::examples::pii::TestMulSecretScalarG2(false, world_size);
     yacl::examples::pii::TestMulGT(false, world_size);
+    yacl::examples::pii::TestPowGT(false, world_size);
+    yacl::examples::pii::TestMulSecretScalarPublicElementGT(false, world_size);
+    yacl::examples::pii::TestMulSecretScalarGT(false, world_size);
     yacl::examples::pii::TestPairingSecretG1(false, world_size);
     yacl::examples::pii::TestPairingSecretG2(false, world_size);
     yacl::examples::pii::TestPairingSecret(false, world_size);
-    std::cout << std::endl;
 
     // Malicious Security Tests
-    std::cout << "--- Malicious Security Tests (" << world_size
-              << " parties) ---" << std::endl;
+    std::cout << "--- Malicious Security Tests (" << world_size << " parties) ---" << std::endl << std::endl;
     yacl::examples::pii::TestRandomShareG1(true, world_size);
     yacl::examples::pii::TestAddG1(true, world_size);
+    yacl::examples::pii::TestMulScalarG1(true, world_size);
+    yacl::examples::pii::TestMulSecretScalarPublicPointG1(true, world_size);
+    yacl::examples::pii::TestMulSecretScalarG1(true, world_size);
     yacl::examples::pii::TestRandomShareG2(true, world_size);
     yacl::examples::pii::TestAddG2(true, world_size);
+    yacl::examples::pii::TestMulScalarG2(true, world_size);
+    yacl::examples::pii::TestMulSecretScalarPublicPointG2(true, world_size);
+    yacl::examples::pii::TestMulSecretScalarG2(true, world_size);
     yacl::examples::pii::TestMulGT(true, world_size);
+    yacl::examples::pii::TestPowGT(true, world_size);
+    yacl::examples::pii::TestMulSecretScalarPublicElementGT(true, world_size);
+    yacl::examples::pii::TestMulSecretScalarGT(true, world_size);
     yacl::examples::pii::TestPairingSecretG1(true, world_size);
     yacl::examples::pii::TestPairingSecretG2(true, world_size);
     yacl::examples::pii::TestPairingSecret(true, world_size);
-    std::cout << std::endl;
   }
 
-  std::cout << "=== All Bilinear Pairing Groups MPC Tests PASSED ===" << std::endl;
   return 0;
 }

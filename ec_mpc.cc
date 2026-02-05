@@ -390,6 +390,61 @@ bool EcMpcSystem::VerifyMac(const EcPointShare& share,
   return (sum_ti == zero);
 }
 
+EcPointShare EcMpcSystem::SharePublicPoint(const yacl::crypto::EcPoint& point) {
+  // Create a share for a public point (all parties know it)
+  // For a public point P, we create shares where:
+  // - Party 0: point_share = P, others: point_share = 0
+  // - delta_point = 0 (infinity) for semi-honest, or random for malicious
+  EcPointShare share;
+  
+  if (malicious_security_) {
+    // For malicious security, generate random delta
+    yacl::math::MPInt delta_scalar;
+    yacl::math::MPInt::RandomLtN(prime_, &delta_scalar);
+    share.delta_point = ec_group_->MulBase(delta_scalar);
+  } else {
+    // For semi-honest, delta is infinity
+    yacl::math::MPInt zero(0);
+    share.delta_point = ec_group_->MulBase(zero);
+  }
+  
+  // Point share: Party 0 gets the point, others get infinity
+  if (rank_ == 0) {
+    share.point_share = point;
+  } else {
+    yacl::math::MPInt zero(0);
+    share.point_share = ec_group_->MulBase(zero);
+  }
+  
+  // MAC share: will be computed during Open() if needed
+  share.mac_share = yacl::math::MPInt(0);
+  
+  return share;
+}
+
+EcPointShare EcMpcSystem::MulSecretScalarPublicPoint(const SecretShare& k_share,
+                                                     const yacl::crypto::EcPoint& public_point) {
+  // Compute [k] * P = [k*P] where [k] is secret-shared and P is public
+  // Simple protocol: each party computes k_i * P and shares it, then combine
+  // [k*P] = Σ_i [k_i * P]_i where k_i is party i's share of [k]
+  
+  // Each party computes k_i * P (where k_i is this party's share of [k])
+  yacl::crypto::EcPoint k_i_P = ec_group_->Mul(public_point, k_share.value_share);
+  
+  // Share k_i * P and combine shares from all parties
+  EcPointShare result = ShareMyValue(k_i_P);
+  for (size_t j = 0; j < world_size_; ++j) {
+    if (j != rank_) {
+      yacl::math::MPInt zero(0);
+      yacl::crypto::EcPoint infinity = ec_group_->MulBase(zero);
+      EcPointShare k_j_P_share = ShareValue(infinity, j);
+      result = Add(result, k_j_P_share);
+    }
+  }
+  
+  return result;
+}
+
 EcPointShare EcMpcSystem::MulSecretScalar(const SecretShare& k_share,
                                            const EcPointShare& point_share,
                                            SpdzMpcSystem* fp_mpc) {
