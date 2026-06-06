@@ -21,10 +21,10 @@ yacl_cc_library(
     srcs = ["spdz_mpc.cc"],
     hdrs = ["spdz_mpc.h"],
     deps = [
-        "//yacl/base:int128",
         "//yacl/base:exception",
+        "//yacl/base:int128",
         "//yacl/link:context",
-        "//yacl/math/mpint:mpint",
+        "//yacl/math/mpint",
     ],
 )
 
@@ -34,12 +34,12 @@ yacl_cc_library(
     hdrs = ["ec_mpc.h"],
     deps = [
         ":spdz_mpc",
-        "//yacl/base:int128",
         "//yacl/base:exception",
+        "//yacl/base:int128",
+        "//yacl/crypto/ecc",
         "//yacl/crypto/ecc:spi",
-        "//yacl/crypto/ecc:ecc",
         "//yacl/link:context",
-        "//yacl/math/mpint:mpint",
+        "//yacl/math/mpint",
         "//yacl/utils:serialize",
     ],
 )
@@ -52,7 +52,7 @@ yacl_cc_library(
         ":spdz_mpc",
         "//yacl/base:int128",
         "//yacl/crypto/hash:hash_utils",
-        "//yacl/math/mpint:mpint",
+        "//yacl/math/mpint",
         "//yacl/utils/spi:type_traits",
     ],
 )
@@ -85,8 +85,8 @@ yacl_cc_binary(
         ":ec_mpc",
         ":spdz_mpc",
         "//yacl/base:exception",
+        "//yacl/crypto/ecc",
         "//yacl/crypto/ecc:spi",
-        "//yacl/crypto/ecc:ecc",
         "//yacl/link:test_util",
     ],
 )
@@ -99,10 +99,10 @@ yacl_cc_library(
         ":ec_mpc",
         ":spdz_mpc",
         "//yacl/base:exception",
-        "//yacl/crypto/pairing:pairing",
+        "//yacl/crypto/pairing",
         "//yacl/link:context",
         "//yacl/math/galois_field:gf",
-        "//yacl/math/mpint:mpint",
+        "//yacl/math/mpint",
         "//yacl/utils:serialize",
     ],
 )
@@ -111,13 +111,13 @@ yacl_cc_binary(
     name = "pairing_mpc_test",
     srcs = ["pairing_mpc_test.cc"],
     deps = [
-        ":pairing_mpc",
         ":ec_mpc",
+        ":pairing_mpc",
         ":spdz_mpc",
         "//yacl/base:exception",
-        "//yacl/crypto/pairing:pairing",
-        "//yacl/crypto/pairing/factory:spi",
+        "//yacl/crypto/pairing",
         "//yacl/crypto/pairing/factory:mcl_factory",
+        "//yacl/crypto/pairing/factory:spi",
         "//yacl/link:test_util",
     ],
 )
